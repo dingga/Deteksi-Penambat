@@ -24,7 +24,7 @@ st.sidebar.title("Pengaturan Analisis")
 # --- 2. LOAD MODEL ---
 @st.cache_resource
 def load_model():
-    # Pastikan file best.pt ada di direktori yang sama dengan app.py di GitHub
+    # Pastikan file best.pt ada di direktori yang sama di GitHub
     return YOLO("best.pt")
 
 try:
@@ -49,9 +49,9 @@ if uploaded_video is not None:
         cap = cv2.VideoCapture(temp_path)
         width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps    = int(cap.get(cv2.CAP_PROP_FPS))
         
-        # --- KONFIGURASI ROI MELAYANG (FLOATING ROI) ---
+        # --- KONTROL ROI MELAYANG (FLOATING ROI) ---
+        # Membatasi deteksi hanya di area rel tengah untuk akurasi tinggi
         y_atas  = int(0.35 * height) 
         y_bawah = int(0.85 * height) 
         roi_points = np.array([
@@ -65,20 +65,20 @@ if uploaded_video is not None:
         summary_counts = Counter()
         captured_faults = []
         
+        # Layout Kolom
         col_vid, col_stat = st.columns([2, 1])
         st_frame = col_vid.empty()
         st_metrics = col_stat.empty()
         
-        st.info("Sedang memproses video dengan logika ROI Akurasi Tinggi...")
+        st.info("Memproses video dengan metode Majority Voting dan Floating ROI...")
 
-        # Jalankan tracking dengan stream=True agar hemat RAM
+        # Menjalankan tracking dengan stream=True untuk efisiensi memori
         results = model.track(source=temp_path, persist=True, imgsz=1024, stream=True, conf=conf_threshold)
 
         for frame_idx, res in enumerate(results):
             frame = res.orig_img
-            frame_clean = frame.copy() # Frame untuk snapshot tanpa garis ROI
             
-            # Gambar Visual ROI & Line pada frame monitoring
+            # Gambar Visual ROI & Line pada monitoring
             overlay = frame.copy()
             cv2.fillPoly(overlay, [roi_points], (0, 255, 0))
             frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
@@ -94,56 +94,59 @@ if uploaded_video is not None:
                     x1, y1, x2, y2 = box
                     cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
                     
-                    # CEK ROI: Hanya proses jika objek di dalam area hijau (rel tengah)
+                    # Cek apakah objek berada di dalam ROI
                     if cv2.pointPolygonTest(roi_points, (cx, cy), False) >= 0:
                         label = model.names[cls]
                         track_history[tid].append(label)
 
-                        # LOGIKA HITUNG & SNAPSHOT (Majority Voting)
+                        # Logika Hitung Crossing Line (Hanya sekali per ID)
                         if cy > y_ref and tid not in counted_ids:
                             counted_ids.add(tid)
                             
-                            # Tentukan label final berdasarkan histori track ID tersebut
+                            # Tentukan label final berdasarkan Majority Vote (Paling sering muncul)
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
                             
-                            # Jika Status "Hilang", ambil snapshot otomatis
+                            # Jika Status "Hilang", ambil snapshot otomatis untuk galeri
                             if "hilang" in final_label.lower():
-                                # Gunakan anotasi YOLO pada frame snapshot
                                 annotated_res = res.plot() 
                                 res_rgb = cv2.cvtColor(annotated_res, cv2.COLOR_BGR2RGB)
                                 captured_faults.append((Image.fromarray(res_rgb), f"ID:{tid} | Frame:{frame_idx}"))
 
-                        # Visualisasi box pada monitoring
-                        color = (0, 0, 255) if label == "Hilang" else (0, 255, 0)
+                        # Visualisasi box pada monitoring video
+                        color = (0, 0, 255) if "hilang" in label.lower() else (0, 255, 0)
                         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
                         cv2.putText(frame, f"ID:{tid}", (int(x1), int(y1)-5), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            # Update Tampilan Monitoring (Real-time)
+            # Update tampilan video real-time di Streamlit
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             st_frame.image(frame_rgb, channels="RGB", use_container_width=True)
             
+            # --- UPDATE DASHBOARD STATISTIK (Semua Aset Muncul) ---
             with st_metrics:
-                st_metrics.empty() # Bersihkan statistik lama
                 st.subheader("📊 Inventaris Aset")
                 st.metric("Total Aset Lewat", len(counted_ids))
+                st.write("---")
                 
-                # Tampilkan rincian per kategori
+                # Daftar kategori yang wajib muncul di dashboard
                 categories = ["DE CLIP", "E Clip", "Hilang", "KA Clip"]
                 for cat in categories:
                     val = summary_counts.get(cat, 0)
-                    st.write(f"🔹 **{cat}**: {val} unit")
+                    if "hilang" in cat.lower():
+                        st.write(f"🚨 **{cat}**: {val} unit")
+                    else:
+                        st.write(f"✅ **{cat}**: {val} unit")
 
         cap.release()
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        st.success("Analisis Selesai!")
+        st.success("Analisis Video Selesai!")
 
-        # Galeri Temuan Spesifik "Hilang"
+        # --- GALERI TEMUAN PENAMBAT HILANG ---
         if captured_faults:
             st.divider()
-            st.subheader(f"🚨 Bukti Temuan Penambat Hilang ({len(captured_faults)} titik)")
+            st.subheader(f"🚨 Bukti Temuan Penambat Hilang ({len(captured_faults)} unit)")
             cols = st.columns(3)
             for i, (img, caption) in enumerate(captured_faults):
                 with cols[i % 3]:
