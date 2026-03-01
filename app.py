@@ -50,35 +50,35 @@ if uploaded_video is not None:
         width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # --- KONTROL ROI MELAYANG (FLOATING ROI) ---
-        # Membatasi deteksi hanya di area rel tengah untuk akurasi tinggi
+        # --- KONFIGURASI ROI MELAYANG (FLOATING ROI) ---
+        # Area deteksi dibatasi agar fokus pada rel tengah
         y_atas  = int(0.35 * height) 
         y_bawah = int(0.85 * height) 
         roi_points = np.array([
             [int(0.25 * width), y_bawah], [int(0.42 * width), y_atas],
             [int(0.58 * width), y_atas], [int(0.75 * width), y_bawah]
         ], np.int32)
-        y_ref = int(0.6 * height) # Garis Hitung
+        y_ref = int(0.6 * height) # Garis Hitung (Crossing Line)
 
         track_history = defaultdict(list)
         counted_ids = set()
         summary_counts = Counter()
         captured_faults = []
         
-        # Layout Kolom
+        # Layout Kolom Streamlit
         col_vid, col_stat = st.columns([2, 1])
         st_frame = col_vid.empty()
         st_metrics = col_stat.empty()
         
         st.info("Memproses video dengan metode Majority Voting dan Floating ROI...")
 
-        # Menjalankan tracking dengan stream=True untuk efisiensi memori
+        # Menjalankan tracking dengan stream=True agar hemat RAM
         results = model.track(source=temp_path, persist=True, imgsz=1024, stream=True, conf=conf_threshold)
 
         for frame_idx, res in enumerate(results):
             frame = res.orig_img
             
-            # Gambar Visual ROI & Line pada monitoring
+            # Gambar Visual ROI & Line pada monitoring video
             overlay = frame.copy()
             cv2.fillPoly(overlay, [roi_points], (0, 255, 0))
             frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
@@ -94,20 +94,21 @@ if uploaded_video is not None:
                     x1, y1, x2, y2 = box
                     cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
                     
-                    # Cek apakah objek berada di dalam ROI
+                    # CEK ROI: Hanya proses jika objek berada di dalam area rel tengah
                     if cv2.pointPolygonTest(roi_points, (cx, cy), False) >= 0:
                         label = model.names[cls]
                         track_history[tid].append(label)
 
-                        # Logika Hitung Crossing Line (Hanya sekali per ID)
+                        # LOGIKA HITUNG & SNAPSHOT (Majority Voting)
                         if cy > y_ref and tid not in counted_ids:
                             counted_ids.add(tid)
                             
-                            # Tentukan label final berdasarkan Majority Vote (Paling sering muncul)
+                            # Tentukan label final berdasarkan histori track (Majority Vote)
+                            # Ini memastikan klasifikasi lebih stabil meski ada flicker deteksi
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
                             
-                            # Jika Status "Hilang", ambil snapshot otomatis untuk galeri
+                            # Jika Status "Hilang", ambil snapshot untuk galeri temuan
                             if "hilang" in final_label.lower():
                                 annotated_res = res.plot() 
                                 res_rgb = cv2.cvtColor(annotated_res, cv2.COLOR_BGR2RGB)
@@ -119,24 +120,30 @@ if uploaded_video is not None:
                         cv2.putText(frame, f"ID:{tid}", (int(x1), int(y1)-5), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            # Update tampilan video real-time di Streamlit
+            # Update Tampilan Monitoring Video secara Real-time
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             st_frame.image(frame_rgb, channels="RGB", use_container_width=True)
             
-            # --- UPDATE DASHBOARD STATISTIK (Semua Aset Muncul) ---
+            # --- DASHBOARD STATISTIK (WAJIB MUNCUL SEMUA) ---
             with st_metrics:
                 st.subheader("📊 Inventaris Aset")
-                st.metric("Total Aset Lewat", len(counted_ids))
+                st.metric("Total Aset Terdeteksi", len(counted_ids))
                 st.write("---")
                 
-                # Daftar kategori yang wajib muncul di dashboard
+                # Inisialisasi daftar kategori agar muncul semua meski jumlahnya 0
+                # Pastikan ejaan nama kategori sesuai dengan label model YOLO Anda
                 categories = ["DE CLIP", "E Clip", "Hilang", "KA Clip"]
+                
                 for cat in categories:
-                    val = summary_counts.get(cat, 0)
+                    val = summary_counts.get(cat, 0) # Ambil nilai, default ke 0 jika belum ada
+                    col_label, col_val = st.columns([3, 1])
+                    
                     if "hilang" in cat.lower():
-                        st.write(f"🚨 **{cat}**: {val} unit")
+                        col_label.write(f"🚨 **{cat}**")
+                        col_val.write(f"**{val}**")
                     else:
-                        st.write(f"✅ **{cat}**: {val} unit")
+                        col_label.write(f"✅ {cat}")
+                        col_val.write(f"{val}")
 
         cap.release()
         if os.path.exists(temp_path):
