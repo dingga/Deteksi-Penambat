@@ -11,7 +11,7 @@ from ultralytics import YOLO
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Railway Fastener Detector", layout="wide")
-st.title("Sistem Deteksi & Dokumentasi Penambat Kereta Api")
+st.title("Sistem Deteksi Penambat Kereta Api")
 
 # --- INISIALISASI FOLDER & SESSION STATE ---
 CAPTURE_DIR = "captured_missing"
@@ -112,7 +112,7 @@ with col_res:
     st.subheader("Rekapitulasi")
     rekap_placeholder = st.empty()
     st.write("---")
-    st.subheader("Aksi Dokumentasi")
+    st.subheader("Dokumentasi Penambat Hilang")
     download_placeholder = st.empty()
 
 # Penanganan Input
@@ -163,7 +163,7 @@ if video_file or source_option == "Kamera Real-time":
 # --- BAGIAN BAWAH: GALERI & DOWNLOAD ---
 if st.session_state.captured_files:
     st.write("---")
-    st.subheader(f"🖼️ Galeri Deteksi Hilang ({len(st.session_state.captured_files)} file)")
+    st.subheader(f"🖼️ Galeri Penambat Hilang ({len(st.session_state.captured_files)} file)")
     
     buf = BytesIO()
     with zipfile.ZipFile(buf, "x") as csv_zip:
