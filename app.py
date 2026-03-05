@@ -58,13 +58,13 @@ def process_frame(frame, model, roi_points, y_ref, width):
     # Inference Tracking
     results = model.track(frame, persist=True, conf=conf_threshold, imgsz=1024, verbose=False)
     
-    # Visual ROI Melayang
+    # Visual ROI Melayang (Trapezoid Baru)
     overlay = frame.copy()
     cv2.fillPoly(overlay, [roi_points], (0, 255, 0))
     frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
     cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
 
-    # Garis Hitung
+    # Garis Hitung (Posisi Baru)
     x_kiri_garis = int(0.28 * width)
     x_kanan_garis = int(0.72 * width)
     cv2.line(frame, (x_kiri_garis, y_ref), (x_kanan_garis, y_ref), (255, 0, 0), 3)
@@ -79,20 +79,19 @@ def process_frame(frame, model, roi_points, y_ref, width):
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
             label = model.names[cls]
 
-            # Cek ROI
+            # Cek ROI menggunakan pointPolygonTest
             if cv2.pointPolygonTest(roi_points, (cx, cy), False) >= 0:
                 st.session_state.track_history[tid].append(label)
 
-                # Logika Hitung Crossing Line
+                # Logika Hitung Crossing Line (Berdasarkan y_ref Baru)
                 if cy > y_ref and tid not in st.session_state.counted_ids:
                     st.session_state.counted_ids.add(tid)
                     final_label = Counter(st.session_state.track_history[tid]).most_common(1)[0][0]
                     st.session_state.summary_counts[final_label] += 1
                     
-                    # Auto-Capture jika Hilang
+                    # Auto-Capture jika label dominan adalah "Hilang"
                     if final_label == "Hilang":
                         filepath = os.path.join(CAPTURE_DIR, f"ID_{tid}_{int(time.time())}.jpg")
-                        # Plot hasil deteksi pada frame yang disimpan
                         cv2.imwrite(filepath, results[0].plot())
                         st.session_state.captured_files.append(filepath)
 
@@ -133,12 +132,18 @@ if video_file or source_option == "Kamera Real-time":
         width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Koordinat ROI Sinkron final.py
-        y_atas, y_bawah, y_ref = int(0.35 * height), int(0.85 * height), int(0.6 * height)
+        # --- PERUBAHAN ROI & GARIS HITUNG TERBARU ---
+        y_atas = int(0.10 * height)
+        y_bawah = int(0.75 * height)
+        y_ref = int(0.5 * height) # Garis hitung di tengah area ROI
+        
         roi_points = np.array([
-            [int(0.25 * width), y_bawah], [int(0.42 * width), y_atas],
-            [int(0.58 * width), y_atas], [int(0.75 * width), y_bawah]
+            [int(0.35 * width), y_bawah], # Kiri bawah
+            [int(0.40 * width), y_atas],  # Kiri atas
+            [int(0.60 * width), y_atas],  # Kanan atas
+            [int(0.65 * width), y_bawah]  # Kanan bawah
         ], np.int32)
+        # --------------------------------------------
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -160,7 +165,6 @@ if st.session_state.captured_files:
     st.write("---")
     st.subheader(f"🖼️ Galeri Deteksi Hilang ({len(st.session_state.captured_files)} file)")
     
-    # Tombol Unduh Semua (.zip)
     buf = BytesIO()
     with zipfile.ZipFile(buf, "x") as csv_zip:
         for f in st.session_state.captured_files:
@@ -173,7 +177,6 @@ if st.session_state.captured_files:
         mime="application/zip"
     )
 
-    # Tampilkan Galeri Grid
     cols = st.columns(4)
     for idx, img_path in enumerate(st.session_state.captured_files):
         with cols[idx % 4]:
