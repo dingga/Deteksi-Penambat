@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import tempfile
 import os
+import zipfile
 from collections import defaultdict, Counter
 from ultralytics import YOLO
 from PIL import Image
@@ -11,73 +12,71 @@ from PIL import Image
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Deteksi Penambat Kereta API", layout="wide")
 
-st.title("🚉 Sistem Deteksi & Counting Penambat Rel")
-st.markdown("Aplikasi ini mendeteksi komponen penambat (E-Clip, DE-Clip, KA-Clip) dan mengidentifikasi penambat yang **Hilang** menggunakan YOLOv8.")
+st.title("🚉 Sistem Deteksi & Dokumentasi Penambat Rel")
+st.markdown("Aplikasi ini mendeteksi komponen penambat dan otomatis mengambil **Screenshot** pada objek yang terdeteksi **Hilang**.")
 
-# --- SIDEBAR: KONFIGURASI MODEL ---
+# --- INISIALISASI FOLDER DOKUMENTASI ---
+CAPTURE_FOLDER = 'deteksi_hilang'
+if not os.path.exists(CAPTURE_FOLDER):
+    os.makedirs(CAPTURE_FOLDER)
+
+# --- SIDEBAR: KONFIGURASI ---
 st.sidebar.header("Konfigurasi")
-# Gunakan model default atau upload (di sini diasumsikan file .pt ada di path yang benar)
-MODEL_PATH = 'best.pt' # Sesuaikan dengan lokasi model Anda
+MODEL_PATH = 'best.pt' 
 conf_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.15)
 
 @st.cache_resource
 def load_model(path):
-    try:
-        return YOLO(path)
-    except Exception as e:
-        st.error(f"Gagal memuat model: {e}")
-        return None
+    if not os.path.exists(path): return None
+    try: return YOLO(path)
+    except: return None
 
 model = load_model(MODEL_PATH)
 
-# --- UPLOAD VIDEO ---
+if model is None:
+    st.error(f"❌ Gagal memuat model '{MODEL_PATH}'. Pastikan file tidak corrupt.")
+else:
+    st.sidebar.success("✅ Model Load Success")
+
 uploaded_video = st.sidebar.file_uploader("Upload Video Rel (MP4)", type=["mp4", "mov", "avi"])
 
-if uploaded_video is not None:
-    # Simpan file sementara
+if uploaded_video is not None and model is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(uploaded_video.read())
     
     cap = cv2.VideoCapture(tfile.name)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-
-    # ROI Settings (Mengikuti logika script asli Anda)
-    y_atas = int(0.35 * height)
-    y_bawah = int(0.85 * height)
+    width = int(cap.get(cv2.CAP_PROP_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_HEIGHT))
+    
+    # ROI Melayang (Floating ROI)
+    y_atas, y_bawah = int(0.35 * height), int(0.85 * height)
     roi_points = np.array([
-        [int(0.25 * width), y_bawah],
-        [int(0.42 * width), y_atas],
-        [int(0.58 * width), y_atas],
-        [int(0.75 * width), y_bawah]
+        [int(0.25 * width), y_bawah], [int(0.42 * width), y_atas],
+        [int(0.58 * width), y_atas], [int(0.75 * width), y_bawah]
     ], np.int32)
     y_ref = int(0.6 * height)
 
-    # UI Layout: Video di kiri, Statistik di kanan
     col1, col2 = st.columns([2, 1])
     frame_placeholder = col1.empty()
     stats_placeholder = col2.empty()
     
-    # Data Struktur
     track_history = defaultdict(list)
     counted_ids = set()
     summary_counts = Counter()
+    captured_files = []
 
-    if st.sidebar.button("Mulai Deteksi"):
-        # Jalankan tracking
-        results = model.track(source=tfile.name, persist=True, imgsz=1024, stream=True, conf=conf_threshold)
+    if st.sidebar.button("Mulai Deteksi & Dokumentasi"):
+        # Bersihkan folder dari deteksi sebelumnya
+        for f in os.listdir(CAPTURE_FOLDER): os.remove(os.path.join(CAPTURE_FOLDER, f))
+        
+        results = model.track(source=tfile.name, persist=True, imgsz=640, stream=True, conf=conf_threshold)
 
-        for res in results:
+        for frame_idx, res in enumerate(results):
             frame = res.orig_img
+            annotated_frame = frame.copy() # Frame bersih untuk di-plot manual
             
-            # Overlay ROI (Visualisasi Area Hijau)
-            overlay = frame.copy()
-            cv2.fillPoly(overlay, [roi_points], (0, 255, 0))
-            frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
+            # Visualisasi ROI & Line
             cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
-            
-            # Garis Hitung Biru
             cv2.line(frame, (int(0.28 * width), y_ref), (int(0.72 * width), y_ref), (255, 0, 0), 3)
 
             if res.boxes is not None and res.boxes.id is not None:
@@ -88,42 +87,51 @@ if uploaded_video is not None:
                 for box, tid, cls in zip(boxes, ids, clss):
                     x1, y1, x2, y2 = box
                     cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+                    label = model.names[cls]
 
-                    # Logika ROI & Counting
                     if cv2.pointPolygonTest(roi_points, (cx, cy), False) >= 0:
-                        label = model.names[cls]
                         track_history[tid].append(label)
 
+                        # LOGIKA COUNTING & SCREENSHOT
                         if cy > y_ref and tid not in counted_ids:
                             counted_ids.add(tid)
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
 
-                        # Visualisasi Bounding Box
-                        color = (0, 255, 0) if tid in counted_ids else (0, 255, 255)
-                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                        cv2.putText(frame, f"ID:{tid} {model.names[cls]}", (int(x1), int(y1)-5), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            # Fitur Screenshot Otomatis jika "Hilang"
+                            if "Hilang" in final_label:
+                                # Gunakan hasil plot asli YOLO untuk dokumentasi
+                                snapshot = res.plot()
+                                file_path = os.path.join(CAPTURE_FOLDER, f"Hilang_ID_{tid}_Frame_{frame_idx}.jpg")
+                                cv2.imwrite(file_path, snapshot)
+                                captured_files.append(file_path)
 
-            # Update Frame di Streamlit
+                        color = (0, 0, 255) if "Hilang" in label else (0, 255, 0)
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                        cv2.putText(frame, f"ID:{tid} {label}", (int(x1), int(y1)-10), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
-            # Update Statistik di Sidebar/Col2 secara dinamis
             with stats_placeholder.container():
-                st.subheader("📊 Hasil Perhitungan")
-                st.write(f"**Total Aset:** {sum(summary_counts.values())}")
-                
-                # Buat tabel hasil
-                df_stats = pd.DataFrame({
-                    "Jenis Aset": summary_counts.keys(),
-                    "Jumlah": summary_counts.values()
-                })
-                st.table(df_stats)
-                
-                if summary_counts["Hilang"] > 0:
-                    st.warning(f"⚠️ Terdeteksi {summary_counts['Hilang']} penambat hilang!")
+                st.subheader("📊 Statistik Real-time")
+                st.write(f"**Total Objek:** {sum(summary_counts.values())}")
+                st.table(pd.DataFrame({"Kategori": summary_counts.keys(), "Jumlah": summary_counts.values()}))
+                if len(captured_files) > 0:
+                    st.warning(f"📸 {len(captured_files)} Foto Bukti Tersimpan")
+
+        # --- FITUR DOWNLOAD ---
+        if captured_files:
+            zip_path = "dokumentasi_deteksi.zip"
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                for f in captured_files: zipf.write(f, os.path.basename(f))
+            
+            st.sidebar.markdown("---")
+            with open(zip_path, "rb") as f:
+                st.sidebar.download_button("📥 Download Semua Foto (ZIP)", f, file_name=zip_path)
 
     cap.release()
+    os.unlink(tfile.name)
 else:
-    st.info("Silakan upload video melalui sidebar untuk memulai.")
+    st.info("Silakan unggah video untuk memulai.")
