@@ -6,41 +6,28 @@ import pandas as pd
 import tempfile
 from collections import defaultdict, Counter
 from ultralytics import YOLO
-
-# Proteksi agar OpenCV tidak mencari display/layar
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
-# Pastikan OpenCV Headless diinstal dengan benar
-try:
-    import cv2
-except ImportError:
-    st.error("Gagal memuat OpenCV Headless. Silakan pastikan OpenCV telah terinstal dengan benar.")
-    st.stop()
+import shutil
 
 # --- PENETAPAN SISTEM (Mesti di atas sekali) ---
-st.set_page_config(page_title="Sistem Deteksi Penambat - ITB", layout="wide")
-
-# --- Judul Halaman ---
-st.title("🚉 Dashboard Deteksi & Dokumentasi Penambat")
-st.markdown("Muat naik video rel untuk mengesan dan merakam lokasi penambat yang **Hilang**.")
+os.environ["QT_QPA_PLATFORM"] = "offscreen"  # Proteksi agar OpenCV tidak mencari display/layar
 
 # --- LOAD MODEL ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, 'best.pt')  # Pastikan nama fail di GitHub ialah best.pt
+MODEL_PATH = 'best.pt'  # Pastikan nama file model sudah benar
 
 @st.cache_resource
 def load_model(path):
     if os.path.exists(path):
         return YOLO(path)
     else:
-        st.error(f"File model 'best.pt' tidak ditemukan di {path}. Pastikan file model ada di folder yang benar.")
+        st.error(f"Model tidak ditemukan di {path}.")
         st.stop()
 
 model = load_model(MODEL_PATH)
 
-if model is None:
-    st.error(f"Fail model 'best.pt' tidak dijumpai di direktori utama.")
-    st.stop()
+# --- KONFIGURASI HALAMAN ---
+st.set_page_config(page_title="Sistem Deteksi Penambat - ITB", layout="wide")
+st.title("🚉 Dashboard Deteksi & Dokumentasi Penambat")
+st.markdown("Muat naik video rel untuk mengesan dan merakam lokasi penambat yang **Hilang**.")
 
 # --- SIDEBAR ---
 st.sidebar.header("Konfigurasi")
@@ -54,41 +41,42 @@ if uploaded_video:
     cap = cv2.VideoCapture(tfile.name)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+
     # ROI & Garisan Rujukan (Sesuai parameter tesis anda)
-    y_ref = int(0.6 * height)
-    roi = np.array([
-        [int(0.25 * width), int(0.85 * height)], 
-        [int(0.42 * width), int(0.35 * height)],
-        [int(0.58 * width), int(0.35 * height)], 
-        [int(0.75 * width), int(0.85 * height)]
+    y_ref = int(0.5 * height)
+    roi_points = np.array([
+        [int(0.35 * width), int(0.70 * height)],  # Kiri bawah
+        [int(0.40 * width), int(0.10 * height)],  # Kiri atas
+        [int(0.60 * width), int(0.10 * height)],  # Kanan atas
+        [int(0.65 * width), int(0.70 * height)]   # Kanan bawah
     ], np.int32)
 
-    # Layout Dashboard
-    col_vid, col_data = st.columns([2, 1])
-    frame_placeholder = col_vid.empty()
-    stats_placeholder = col_data.empty()
+    # Penyiapan Video Writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out_video = cv2.VideoWriter("hasil_counting_final.mp4", fourcc, fps, (width, height))
 
-    st.divider()
-    # Placeholder Galeri
-    gallery_header = st.empty()
-    gallery_placeholder = st.empty()
+    # Struktur Data
+    track_history = defaultdict(list)
+    counted_ids = set()
+    summary_counts = Counter()
+    final_results = []
 
-    if st.sidebar.button("Mula Analisis"):
-        track_history = defaultdict(list)
-        counted = set()
-        summary_counts = Counter()
-        captured_images = [] 
-
-        # YOLO Tracking (Streaming Mode)
-        results = model.track(source=tfile.name, persist=True, imgsz=640, stream=True, conf=conf_threshold)
+    # --- Mulai Analisis ---
+    if st.sidebar.button("Mulai Analisis"):
+        results = model.track(source=tfile.name, persist=True, imgsz=1024, stream=True, conf=conf_threshold)
 
         for frame_idx, res in enumerate(results):
             frame = res.orig_img
-            
-            # Lukis ROI & Garisan pada Video
-            cv2.polylines(frame, [roi], True, (0, 255, 0), 2)
-            cv2.line(frame, (int(0.28 * width), y_ref), (int(0.72 * width), y_ref), (255, 0, 0), 3)
+
+            # Visualisasi ROI (Hijau Transparan)
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [roi_points], (0, 255, 0))
+            frame = cv2.addWeighted(overlay, 0.1, frame, 0.9, 0)
+            cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
+
+            # Visualisasi Garis Hitung (Biru)
+            cv2.line(frame, (int(0.28*width), y_ref), (int(0.72*width), y_ref), (255, 0, 0), 3)
 
             if res.boxes is not None and res.boxes.id is not None:
                 boxes = res.boxes.xyxy.cpu().numpy()
@@ -100,54 +88,77 @@ if uploaded_video:
                     cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
                     label = model.names[cls]
 
-                    # Semak jika dalam ROI
-                    if cv2.pointPolygonTest(roi, (cx, cy), False) >= 0:
+                    # Cek apakah objek berada di dalam ROI
+                    if cv2.pointPolygonTest(roi_points, (cx, cy), False) >= 0:
                         track_history[tid].append(label)
 
-                        # Logika Counting melepasi garisan
-                        if cy > y_ref and tid not in counted:
-                            counted.add(tid)
+                        # LOGIKA HITUNG: Saat objek melewati garis pertama kali
+                        if cy > y_ref and tid not in counted_ids:
+                            counted_ids.add(tid)
+
+                            # Tentukan label final menggunakan Majority Vote
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
 
-                            # Capture Screenshot jika "Hilang"
-                            if "Hilang" in final_label:
-                                annotated_frame = res.plot()  # Ambil frame dengan box YOLO
-                                snapshot_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                                captured_images.append({"img": snapshot_rgb, "id": tid})
-                                
-                                # Kemaskini Galeri Real-time (4 terbaru)
-                                with gallery_placeholder.container():
-                                    gallery_header.subheader(f"📸 Screenshot Penambat Hilang ({len(captured_images)} Kes)")
-                                    cols = st.columns(4)
-                                    items_to_show = captured_images[-4:]
-                                    for i, item in enumerate(reversed(items_to_show)):
-                                        with cols[i]:
-                                            st.image(item["img"], caption=f"ID: {item['id']}", use_container_width=True)
+                            # Catat data SNAPSHOT UNIK untuk proses capture
+                            final_results.append({
+                                'frame': frame_idx,
+                                'track_id': tid,
+                                'class_name': final_label
+                            })
 
-            # Update Frame Video
-            frame_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
-            
-            # Update Statistik
-            with stats_placeholder.container():
-                st.subheader("📊 Statistik Deteksi")
-                st.metric("Total Unit Diproses", sum(summary_counts.values()))
-                st.table(pd.DataFrame({
-                    "Kategori": summary_counts.keys(), 
-                    "Jumlah": summary_counts.values()
-                }))
+                        # Gambar Box di Video
+                        color = (0, 0, 255) if label == "Hilang" else (0, 255, 0)
+                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                        cv2.putText(frame, f"ID:{tid}", (int(x1), int(y1)-5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # Tampilkan Galeri Penuh Selepas Selesai
+            # Dashboard Rekapitulasi di Layar Video
+            cv2.rectangle(frame, (20, 20), (350, 210), (0, 0, 0), -1)
+            classes_display = ["DE CLIP", "E Clip", "Hilang", "KA Clip"]
+            for i, cls_name in enumerate(classes_display):
+                count = summary_counts[cls_name]
+                text_color = (0, 0, 255) if cls_name == "Hilang" else (0, 255, 0)
+                cv2.putText(frame, f"{cls_name}: {count}", (40, 60 + (i*35)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+
+            out_video.write(frame)
+
+        cap.release()
+        out_video.release()
+
+        # Simpan ke DataFrame agar bisa dibaca Cell Capture
+        df = pd.DataFrame(final_results)
+
+        # Tampilkan Laporan Akhir
         st.success("✅ Analisis Selesai!")
-        if captured_images:
-            st.divider()
-            st.subheader("📁 Semua Dokumentasi Lokasi Hilang")
-            full_cols = st.columns(5)
-            for idx, item in enumerate(captured_images):
-                with full_cols[idx % 5]:
-                    st.image(item["img"], caption=f"ID: {item['id']}", use_container_width=True)
+        st.subheader("📊 Statistik Deteksi")
+        st.table(df)
 
-    cap.release()
-    os.unlink(tfile.name)
+        # Simpan Galeri Foto Lokasi Hilang
+        capture_folder = 'Hasil_Penambat_Hilang'
+        if not os.path.exists(capture_folder):
+            os.makedirs(capture_folder)
+
+        df_missing = df[df['class_name'] == 'Hilang']
+
+        cap = cv2.VideoCapture(tfile.name)
+        for _, row in df_missing.iterrows():
+            frame_no, track_id = int(row['frame']), int(row['track_id'])
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+            ret, frame = cap.read()
+
+            if ret:
+                results_single = model.predict(frame, conf=0.15, imgsz=1024, verbose=False)
+                annotated_frame = results_single[0].plot()
+                file_name = f"{capture_folder}/Hilang_ID_{track_id}_Frame_{frame_no}.jpg"
+                cv2.imwrite(file_name, annotated_frame)
+
+        cap.release()
+
+        # Zip dan Download
+        shutil.make_archive(f'{capture_folder}_zip', 'zip', capture_folder)
+        st.download_button("Unduh Semua Foto Hilang", f"{capture_folder}_zip.zip")
+
 else:
-    st.info("Sila muat naik video untuk memulakan sistem.")
+    st.info("Silakan unggah video untuk memulai deteksi.")
