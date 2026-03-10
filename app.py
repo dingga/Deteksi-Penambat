@@ -126,3 +126,4 @@ if uploaded_file is not None:
                         cols[i].image(item["img"], caption=f"ID: {item['id']}")
 
         st.success("✅ Pemrosesan selesai.")
+
