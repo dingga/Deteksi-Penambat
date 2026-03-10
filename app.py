@@ -2,7 +2,6 @@ import streamlit as st
 import os
 
 # --- PROTEKSI SISTEM ---
-# Memaksa OpenCV berjalan dalam mode offscreen (mencegah error libGL)
 os.environ["QT_QPA_PLATFORM"] = "offscreen" 
 
 try:
@@ -20,7 +19,7 @@ except ImportError as e:
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Deteksi Penambat Rel - ITB", layout="wide")
 st.title("🚉 Dashboard Deteksi & Galeri Penambat")
-st.markdown("Hasil deteksi penambat **Hilang** akan otomatis muncul di galeri bawah secara real-time.")
+st.markdown("Aplikasi ini mendeteksi komponen penambat dan mendokumentasikan objek yang **Hilang** secara real-time.")
 
 # --- LOAD MODEL ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -42,9 +41,10 @@ if model is None:
 else:
     st.sidebar.success("✅ Model Berhasil Dimuat")
 
-# --- SIDEBAR & UPLOAD ---
+# --- SIDEBAR ---
+st.sidebar.header("Konfigurasi")
 uploaded_video = st.sidebar.file_uploader("Upload Video Rel (MP4)", type=["mp4"])
-conf_threshold = st.sidebar.slider("Confidence", 0.0, 1.0, 0.15)
+conf_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.15)
 
 if uploaded_video:
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
@@ -63,13 +63,15 @@ if uploaded_video:
         [int(0.75 * width), int(0.85 * height)]
     ], np.int32)
 
-    col1, col2 = st.columns([2, 1])
-    frame_placeholder = col1.empty()
-    stats_placeholder = col2.empty()
+    # Layout Utama: Video (Kiri) & Statistik (Kanan)
+    col_main, col_stat = st.columns([2, 1])
+    frame_placeholder = col_main.empty()
+    stats_placeholder = col_stat.empty()
 
+    # --- REVISI BAGIAN GALERI ---
     st.divider()
-    st.subheader("📸 Galeri Bukti Penambat Hilang")
-    gallery_container = st.container()
+    # Placeholder ini kunci agar galeri tidak berakumulasi ke bawah
+    gallery_placeholder = st.empty() 
 
     if st.sidebar.button("Mulai Analisis"):
         track_history = defaultdict(list)
@@ -105,21 +107,37 @@ if uploaded_video:
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
 
+                            # Logika Pengambilan Gambar
                             if "Hilang" in final_label:
                                 snapshot = res.plot()
                                 snapshot_rgb = cv2.cvtColor(snapshot, cv2.COLOR_BGR2RGB)
                                 captured_images.append({"img": snapshot_rgb, "txt": f"ID:{tid}"})
                                 
-                                # Update Galeri (4 foto terbaru)
-                                with gallery_container:
+                                # REVISI: Update tampilan galeri setiap ada temuan baru
+                                with gallery_placeholder.container():
+                                    st.subheader(f"📸 Galeri Temuan Terbaru ({len(captured_images)} total)")
                                     cols = st.columns(4)
-                                    for i, item in enumerate(reversed(captured_images[-4:])):
-                                        cols[i].image(item["img"], caption=item["txt"], use_container_width=True)
+                                    # Ambil maksimal 4 foto terbaru
+                                    latest_items = captured_images[-4:]
+                                    for i, item in enumerate(reversed(latest_items)):
+                                        with cols[i]:
+                                            st.image(item["img"], caption=item["txt"], use_container_width=True)
 
-            # Update Live Video & Statistik
+            # Update Live Video Feed
             frame_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
+            
+            # Update Statistik di Kolom Kanan
             with stats_placeholder.container():
-                st.table(pd.DataFrame({"Kategori": summary_counts.keys(), "Unit": summary_counts.values()}))
+                st.subheader("📊 Statistik")
+                st.metric("Total Deteksi", sum(summary_counts.values()))
+                st.table(pd.DataFrame({
+                    "Kategori": summary_counts.keys(), 
+                    "Jumlah": summary_counts.values()
+                }))
+
+        st.success("✅ Analisis Selesai")
 
     cap.release()
     os.unlink(tfile.name)
+else:
+    st.info("Silakan upload video rel untuk memulai deteksi.")
