@@ -18,8 +18,8 @@ except ImportError as e:
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Deteksi Penambat Rel - ITB", layout="wide")
-st.title("🚉 Dashboard Deteksi & Galeri Penambat")
-st.markdown("Aplikasi ini mendeteksi komponen penambat dan mendokumentasikan objek yang **Hilang** secara real-time.")
+st.title("🚉 Dashboard Deteksi & Dokumentasi Penambat")
+st.markdown("Sistem deteksi komponen penambat rel secara otomatis dengan dokumentasi temuan **Hilang**.")
 
 # --- LOAD MODEL ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,14 +63,13 @@ if uploaded_video:
         [int(0.75 * width), int(0.85 * height)]
     ], np.int32)
 
-    # Layout Utama: Video (Kiri) & Statistik (Kanan)
+    # Layout Utama
     col_main, col_stat = st.columns([2, 1])
     frame_placeholder = col_main.empty()
     stats_placeholder = col_stat.empty()
 
-    # --- REVISI BAGIAN GALERI ---
     st.divider()
-    # Placeholder ini kunci agar galeri tidak berakumulasi ke bawah
+    # Placeholder untuk galeri real-time (hanya tampilkan 4 terbaru)
     gallery_placeholder = st.empty() 
 
     if st.sidebar.button("Mulai Analisis"):
@@ -107,37 +106,57 @@ if uploaded_video:
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
 
-                            # Logika Pengambilan Gambar
                             if "Hilang" in final_label:
                                 snapshot = res.plot()
                                 snapshot_rgb = cv2.cvtColor(snapshot, cv2.COLOR_BGR2RGB)
-                                captured_images.append({"img": snapshot_rgb, "txt": f"ID:{tid}"})
+                                captured_images.append({"img": snapshot_rgb, "id": tid})
                                 
-                                # REVISI: Update tampilan galeri setiap ada temuan baru
+                                # REVISI: Update galeri real-time (4 terbaru)
                                 with gallery_placeholder.container():
-                                    st.subheader(f"📸 Galeri Temuan Terbaru ({len(captured_images)} total)")
+                                    st.subheader(f"📸 Monitoring Temuan ({len(captured_images)} Hilang)")
                                     cols = st.columns(4)
-                                    # Ambil maksimal 4 foto terbaru
                                     latest_items = captured_images[-4:]
                                     for i, item in enumerate(reversed(latest_items)):
                                         with cols[i]:
-                                            st.image(item["img"], caption=item["txt"], use_container_width=True)
+                                            st.image(item["img"], caption=f"ID: {item['id']}", use_container_width=True)
 
             # Update Live Video Feed
             frame_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
             
-            # Update Statistik di Kolom Kanan
+            # Update Statistik
             with stats_placeholder.container():
                 st.subheader("📊 Statistik")
-                st.metric("Total Deteksi", sum(summary_counts.values()))
+                st.metric("Total Terdeteksi", sum(summary_counts.values()))
                 st.table(pd.DataFrame({
                     "Kategori": summary_counts.keys(), 
                     "Jumlah": summary_counts.values()
                 }))
 
-        st.success("✅ Analisis Selesai")
+        # --- BAGIAN SETELAH ANALISIS SELESAI ---
+        st.success(f"✅ Analisis Selesai. Total {len(captured_images)} penambat hilang ditemukan.")
+        
+        if len(captured_images) > 0:
+            st.divider()
+            st.subheader("📁 Galeri Dokumentasi Lengkap")
+            st.info("Berikut adalah seluruh penambat yang terdeteksi Hilang.")
+            
+            # Grid Galeri Lengkap (5 kolom)
+            full_grid_cols = st.columns(5)
+            for idx, item in enumerate(captured_images):
+                with full_grid_cols[idx % 5]:
+                    st.image(item["img"], caption=f"ID: {item['id']}", use_container_width=True)
+            
+            # Fitur Unduh Laporan CSV
+            st.divider()
+            df_report = pd.DataFrame([{"ID_Penambat": x["id"], "Status": "Hilang"} for x in captured_images])
+            st.download_button(
+                label="📥 Download Laporan Deteksi (CSV)",
+                data=df_report.to_csv(index=False),
+                file_name="laporan_penambat_hilang.csv",
+                mime="text/csv"
+            )
 
     cap.release()
     os.unlink(tfile.name)
 else:
-    st.info("Silakan upload video rel untuk memulai deteksi.")
+    st.info("Silakan upload video rel untuk memulai analisis.")
