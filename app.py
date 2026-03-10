@@ -1,21 +1,20 @@
 import streamlit as st
 import os
 
-# --- PROTEKSI SISTEM ---
-os.environ["QT_QPA_PLATFORM"] = "offscreen" 
+import streamlit as st
+import os
+
+# WAJIB: Taruh ini di baris paling atas sebelum import cv2
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 try:
     import cv2
     import numpy as np
-    import pandas as pd
-    import tempfile
-    from collections import defaultdict, Counter
     from ultralytics import YOLO
 except ImportError as e:
-    st.error(f"Gagal memuat modul: {e}")
-    st.info("Pastikan requirements.txt Anda HANYA berisi 'opencv-python-headless'.")
+    st.error(f"Modul tidak ditemukan: {e}")
     st.stop()
-
+    
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Deteksi Penambat Rel - ITB", layout="wide")
 st.title("🚉 Dashboard Deteksi & Dokumentasi Penambat")
