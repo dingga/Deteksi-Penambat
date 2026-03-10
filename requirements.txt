@@ -1,6 +1,5 @@
-opencv-python-headless
-ultralytics
 streamlit
+opencv-python
+ultralytics
 pandas
 numpy
-lapx
