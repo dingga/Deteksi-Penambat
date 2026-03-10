@@ -12,7 +12,7 @@ from ultralytics import YOLO
 st.set_page_config(page_title="Deteksi Penambat Kereta API", layout="wide")
 
 st.title("🚉 Sistem Deteksi & Dokumentasi Penambat Rel")
-st.markdown("Aplikasi ini mendeteksi komponen penambat dan otomatis mengambil **Screenshot** pada objek yang terdeteksi **Hilang**.")
+st.markdown("Aplikasi untuk mendeteksi komponen penambat dan otomatis mengambil **Screenshot** pada objek yang terdeteksi **Hilang**.")
 
 # --- INISIALISASI FOLDER DOKUMENTASI ---
 CAPTURE_FOLDER = 'deteksi_hilang'
@@ -21,21 +21,26 @@ if not os.path.exists(CAPTURE_FOLDER):
 
 # --- SIDEBAR: KONFIGURASI ---
 st.sidebar.header("Konfigurasi")
-MODEL_PATH = 'best.pt' 
-conf_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.15)
+
+# Menggunakan path absolut untuk memastikan file best.pt ditemukan
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, 'best.pt')
 
 @st.cache_resource
 def load_model(path):
-    if not os.path.exists(path): return None
-    try: 
+    if not os.path.exists(path):
+        return None
+    try:
+        # Load model YOLOv8
         return YOLO(path)
-    except: 
+    except Exception:
         return None
 
 model = load_model(MODEL_PATH)
 
 if model is None:
-    st.error(f"❌ Gagal memuat model '{MODEL_PATH}'. Pastikan file ada di GitHub.")
+    st.error(f"❌ File 'best.pt' tidak terbaca di: {MODEL_PATH}")
+    st.info("Pastikan file sudah di-push ke GitHub dan coba tekan 'Reboot App' di dashboard Streamlit.")
 else:
     st.sidebar.success("✅ Model Load Success")
 
@@ -46,15 +51,11 @@ if uploaded_video is not None and model is not None:
     tfile.write(uploaded_video.read())
     
     cap = cv2.VideoCapture(tfile.name)
-    # PERBAIKAN DI SINI: Menggunakan konstanta yang benar
+    # PERBAIKAN: Menggunakan konstanta yang benar
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Jika OpenCV gagal membaca metadata, set default agar tidak error
-    if width == 0 or height == 0:
-        width, height = 1280, 720
-
-    # ROI Melayang (Floating ROI)
+    # ROI Melayang (Floating ROI) sesuai parameter tesis Anda
     y_atas, y_bawah = int(0.35 * height), int(0.85 * height)
     roi_points = np.array([
         [int(0.25 * width), y_bawah], [int(0.42 * width), y_atas],
@@ -71,17 +72,17 @@ if uploaded_video is not None and model is not None:
     summary_counts = Counter()
     captured_files = []
 
-    if st.sidebar.button("Mulai Deteksi & Dokumentasi"):
-        # Bersihkan folder dari deteksi sebelumnya
+    if st.sidebar.button("Mulai Deteksi"):
+        # Reset folder dokumentasi
         for f in os.listdir(CAPTURE_FOLDER): os.remove(os.path.join(CAPTURE_FOLDER, f))
         
-        # Gunakan imgsz=640 untuk kestabilan di Streamlit Cloud
+        # Jalankan tracking
         results = model.track(source=tfile.name, persist=True, imgsz=640, stream=True, conf=conf_threshold)
 
         for frame_idx, res in enumerate(results):
             frame = res.orig_img
             
-            # Visualisasi ROI & Line
+            # Draw ROI
             cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
             cv2.line(frame, (int(0.28 * width), y_ref), (int(0.72 * width), y_ref), (255, 0, 0), 3)
 
@@ -103,7 +104,7 @@ if uploaded_video is not None and model is not None:
                             final_label = Counter(track_history[tid]).most_common(1)[0][0]
                             summary_counts[final_label] += 1
 
-                            # Simpan Screenshot jika "Hilang"
+                            # Auto-Screenshot "Hilang"
                             if "Hilang" in final_label:
                                 snapshot = res.plot()
                                 file_path = os.path.join(CAPTURE_FOLDER, f"Hilang_ID_{tid}.jpg")
@@ -113,26 +114,22 @@ if uploaded_video is not None and model is not None:
 
                         color = (0, 0, 255) if "Hilang" in label else (0, 255, 0)
                         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                        cv2.putText(frame, f"ID:{tid} {label}", (int(x1), int(y1)-10), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
             with stats_placeholder.container():
                 st.subheader("📊 Statistik")
-                st.write(f"**Total Objek:** {sum(summary_counts.values())}")
+                st.write(f"**Total Aset:** {sum(summary_counts.values())}")
                 st.table(pd.DataFrame({"Kategori": summary_counts.keys(), "Jumlah": summary_counts.values()}))
                 if len(captured_files) > 0:
-                    st.warning(f"📸 {len(captured_files)} Foto Bukti Tersimpan")
+                    st.warning(f"📸 {len(captured_files)} Bukti Foto Tersimpan")
 
         if captured_files:
-            zip_path = "dokumentasi_deteksi.zip"
+            zip_path = "bukti_deteksi.zip"
             with zipfile.ZipFile(zip_path, 'w') as zipf:
                 for f in captured_files: zipf.write(f, os.path.basename(f))
-            
-            with open(zip_path, "rb") as f:
-                st.sidebar.download_button("📥 Download Bukti (ZIP)", f, file_name=zip_path)
+            st.sidebar.download_button("📥 Download Bukti (ZIP)", open(zip_path, "rb"), file_name=zip_path)
 
     cap.release()
     os.unlink(tfile.name)
