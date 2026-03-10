@@ -1,76 +1,125 @@
 import streamlit as st
-import cv2
-import numpy as np
-import tempfile
-from ultralytics import YOLO
-from collections import defaultdict, Counter
+import os
 
-st.title("Sistem Deteksi Penambat Rel")
+# --- PROTEKSI SISTEM ---
+# Memaksa OpenCV berjalan dalam mode offscreen (mencegah error libGL)
+os.environ["QT_QPA_PLATFORM"] = "offscreen" 
 
-# 1. Load Model
+try:
+    import cv2
+    import numpy as np
+    import pandas as pd
+    import tempfile
+    from collections import defaultdict, Counter
+    from ultralytics import YOLO
+except ImportError as e:
+    st.error(f"Gagal memuat modul: {e}")
+    st.info("Pastikan requirements.txt Anda HANYA berisi 'opencv-python-headless'.")
+    st.stop()
+
+# --- KONFIGURASI HALAMAN ---
+st.set_page_config(page_title="Deteksi Penambat Rel - ITB", layout="wide")
+st.title("🚉 Dashboard Deteksi & Galeri Penambat")
+st.markdown("Hasil deteksi penambat **Hilang** akan otomatis muncul di galeri bawah secara real-time.")
+
+# --- LOAD MODEL ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, 'best.pt')
+
 @st.cache_resource
-def load_model():
-    return YOLO('best.pt') # Pastikan file ini ada di repo GitHub Anda
+def load_model(path):
+    if not os.path.exists(path): return None
+    try:
+        return YOLO(path)
+    except:
+        return None
 
-model = load_model()
+model = load_model(MODEL_PATH)
 
-# 2. Upload Video
-uploaded_file = st.file_uploader("Unggah Video Penambat (.mp4, .avi)", type=["mp4", "avi", "mov"])
+if model is None:
+    st.error(f"File 'best.pt' tidak ditemukan di {MODEL_PATH}")
+    st.stop()
+else:
+    st.sidebar.success("✅ Model Berhasil Dimuat")
 
-if uploaded_file is not None:
-    # Simpan file sementara karena OpenCV butuh path file
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(uploaded_file.read())
+# --- SIDEBAR & UPLOAD ---
+uploaded_video = st.sidebar.file_uploader("Upload Video Rel (MP4)", type=["mp4"])
+conf_threshold = st.sidebar.slider("Confidence", 0.0, 1.0, 0.15)
+
+if uploaded_video:
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    tfile.write(uploaded_video.read())
     
     cap = cv2.VideoCapture(tfile.name)
-    st_frame = st.empty() # Placeholder untuk video
-    
-    # Inisialisasi Data
-    summary_counts = Counter()
-    counted_ids = set()
-    track_history = defaultdict(list)
-    
-    # Parameter ROI (Bisa dibuat slider jika mau)
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # ROI & Garis Hitung (Parameter Tesis)
     y_ref = int(0.6 * height)
+    roi = np.array([
+        [int(0.25 * width), int(0.85 * height)], 
+        [int(0.42 * width), int(0.35 * height)],
+        [int(0.58 * width), int(0.35 * height)], 
+        [int(0.75 * width), int(0.85 * height)]
+    ], np.int32)
 
-    stop_button = st.button("Stop Proses")
+    col1, col2 = st.columns([2, 1])
+    frame_placeholder = col1.empty()
+    stats_placeholder = col2.empty()
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret or stop_button:
-            break
+    st.divider()
+    st.subheader("📸 Galeri Bukti Penambat Hilang")
+    gallery_container = st.container()
 
-        # Logika Tracking YOLO
-        results = model.track(frame, persist=True, conf=0.15, verbose=False)
-        
-        if results[0].boxes.id is not None:
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            ids = results[0].boxes.id.cpu().numpy().astype(int)
-            clss = results[0].boxes.cls.cpu().numpy().astype(int)
+    if st.sidebar.button("Mulai Analisis"):
+        track_history = defaultdict(list)
+        counted = set()
+        summary_counts = Counter()
+        captured_images = [] 
 
-            for box, tid, cls in zip(boxes, ids, clss):
-                x1, y1, x2, y2 = box
-                cy = int((y1 + y2) / 2)
+        # YOLO Tracking
+        results = model.track(source=tfile.name, persist=True, imgsz=640, stream=True, conf=conf_threshold)
 
-                # Logika Hitung Sederhana (Garis Horizontal)
-                if cy > y_ref and tid not in counted_ids:
-                    counted_ids.add(tid)
+        for frame_idx, res in enumerate(results):
+            frame = res.orig_img
+            
+            # Visualisasi ROI & Line
+            cv2.polylines(frame, [roi], True, (0, 255, 0), 2)
+            cv2.line(frame, (int(0.28 * width), y_ref), (int(0.72 * width), y_ref), (255, 0, 0), 3)
+
+            if res.boxes is not None and res.boxes.id is not None:
+                boxes = res.boxes.xyxy.cpu().numpy()
+                ids = res.boxes.id.cpu().numpy().astype(int)
+                clss = res.boxes.cls.cpu().numpy().astype(int)
+
+                for box, tid, cls in zip(boxes, ids, clss):
+                    x1, y1, x2, y2 = box
+                    cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
                     label = model.names[cls]
-                    summary_counts[label] += 1
 
-                # Gambar Box
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                    if cv2.pointPolygonTest(roi, (cx, cy), False) >= 0:
+                        track_history[tid].append(label)
 
-        # Tampilkan ke Streamlit
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        st_frame.image(frame_rgb, channels="RGB", use_column_width=True)
+                        if cy > y_ref and tid not in counted:
+                            counted.add(tid)
+                            final_label = Counter(track_history[tid]).most_common(1)[0][0]
+                            summary_counts[final_label] += 1
 
-        # Dashboard Statistik di Sidebar
-        st.sidebar.title("Hasil Deteksi")
-        for name, count in summary_counts.items():
-            st.sidebar.write(f"**{name}**: {count}")
+                            if "Hilang" in final_label:
+                                snapshot = res.plot()
+                                snapshot_rgb = cv2.cvtColor(snapshot, cv2.COLOR_BGR2RGB)
+                                captured_images.append({"img": snapshot_rgb, "txt": f"ID:{tid}"})
+                                
+                                # Update Galeri (4 foto terbaru)
+                                with gallery_container:
+                                    cols = st.columns(4)
+                                    for i, item in enumerate(reversed(captured_images[-4:])):
+                                        cols[i].image(item["img"], caption=item["txt"], use_container_width=True)
+
+            # Update Live Video & Statistik
+            frame_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
+            with stats_placeholder.container():
+                st.table(pd.DataFrame({"Kategori": summary_counts.keys(), "Unit": summary_counts.values()}))
 
     cap.release()
-    st.success("Proses Selesai!")
+    os.unlink(tfile.name)
