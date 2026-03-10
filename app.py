@@ -6,37 +6,35 @@ import pandas as pd
 import tempfile
 from collections import defaultdict, Counter
 from ultralytics import YOLO
-import os
-import sys
 
 # Proteksi agar OpenCV tidak mencari display/layar
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-import streamlit as st
+# Pastikan OpenCV Headless diinstal dengan benar
 try:
     import cv2
 except ImportError:
-    st.error("Gagal memuat OpenCV Headless. Silakan hapus aplikasi dan deploy ulang.")
+    st.error("Gagal memuat OpenCV Headless. Silakan pastikan OpenCV telah terinstal dengan benar.")
     st.stop()
 
-# ... sisa kode import lainnya
 # --- PENETAPAN SISTEM (Mesti di atas sekali) ---
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-
 st.set_page_config(page_title="Sistem Deteksi Penambat - ITB", layout="wide")
 
+# --- Judul Halaman ---
 st.title("🚉 Dashboard Deteksi & Dokumentasi Penambat")
 st.markdown("Muat naik video rel untuk mengesan dan merakam lokasi penambat yang **Hilang**.")
 
 # --- LOAD MODEL ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, 'best.pt') # Pastikan nama fail di GitHub ialah best.pt
+MODEL_PATH = os.path.join(BASE_DIR, 'best.pt')  # Pastikan nama fail di GitHub ialah best.pt
 
 @st.cache_resource
 def load_model(path):
     if os.path.exists(path):
         return YOLO(path)
-    return None
+    else:
+        st.error(f"File model 'best.pt' tidak ditemukan di {path}. Pastikan file model ada di folder yang benar.")
+        st.stop()
 
 model = load_model(MODEL_PATH)
 
@@ -114,7 +112,7 @@ if uploaded_video:
 
                             # Capture Screenshot jika "Hilang"
                             if "Hilang" in final_label:
-                                annotated_frame = res.plot() # Ambil frame dengan box YOLO
+                                annotated_frame = res.plot()  # Ambil frame dengan box YOLO
                                 snapshot_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
                                 captured_images.append({"img": snapshot_rgb, "id": tid})
                                 
