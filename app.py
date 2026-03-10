@@ -6,7 +6,20 @@ import pandas as pd
 import tempfile
 from collections import defaultdict, Counter
 from ultralytics import YOLO
+import os
+import sys
 
+# Proteksi agar OpenCV tidak mencari display/layar
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+import streamlit as st
+try:
+    import cv2
+except ImportError:
+    st.error("Gagal memuat OpenCV Headless. Silakan hapus aplikasi dan deploy ulang.")
+    st.stop()
+
+# ... sisa kode import lainnya
 # --- PENETAPAN SISTEM (Mesti di atas sekali) ---
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
